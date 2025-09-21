@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ValidationRule xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>No_Future_Donations</fullName>
+    <active>true</active>
+    <errorConditionFormula>Donation_Date__c &gt; TODAY()</errorConditionFormula>
+    <errorDisplayField>Donation_Date__c</errorDisplayField>
+    <errorMessage>Donation date cannot be in the future</errorMessage>
+</ValidationRule>

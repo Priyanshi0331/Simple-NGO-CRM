@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ValidationRule xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Email_Required_Online</fullName>
+    <active>true</active>
+    <errorConditionFormula>AND(
+  ISPICKVAL(Payment_Method__c, &quot;Online&quot;),
+  ISBLANK(Donor__r.Email__c)
+)</errorConditionFormula>
+    <errorDisplayField>Payment_Method__c</errorDisplayField>
+    <errorMessage>Email is required for online donations</errorMessage>
+</ValidationRule>
