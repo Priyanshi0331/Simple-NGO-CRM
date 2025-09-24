@@ -1,90 +1,50 @@
-public class DonationTriggerHandler {
-    
-    // Validate donation data before insert
-    public static void validateDonationData(List<Donation__c> newDonations) {
-        
-        for (Donation__c donation : newDonations) {
-            // Additional validation beyond validation rules
-            
-            // Check for weekend donations (might need special processing)
-            Datetime donationDateTime = DateTime.newInstance(
-                donation.Donation_Date__c, Time.newInstance(12, 0, 0, 0));
-            String dayOfWeek = donationDateTime.format('EEEE');
-            
-            if (dayOfWeek == 'Saturday' || dayOfWeek == 'Sunday') {
-                // Add note for weekend donations
-                if (String.isBlank(donation.Notes__c)) {
-                    donation.Notes__c = 'Weekend donation - verify processing';
-                } else {
-                    donation.Notes__c += '\nWeekend donation - verify processing';
-                }
-            }
-        }
-    }
-    
-    // Handle post-donation processing
-    public static void handleDonationProcessing(List<Donation__c> newDonations, 
-                                              Map<Id, Donation__c> oldDonationMap) {
-        
-        List<Task> tasksToCreate = new List<Task>();
+public with sharing class DonationTriggerHandler {
+    public static void handleAfterInsertOrUpdate(List<Donation__c> donations) {
+        if (donations == null || donations.isEmpty()) return;
         Set<Id> donorIds = new Set<Id>();
-        
-        for (Donation__c donation : newDonations) {
-            donorIds.add(donation.Donor__c);
-            
-            // Create special task for first-time donors
-            if (Trigger.isInsert) {
-                // Check if this is their first donation
-                Integer donationCount = [SELECT COUNT() 
-                                       FROM Donation__c 
-                                       WHERE Donor__c = :donation.Donor__c];
-                
-                if (donationCount == 1) {
-                    Task welcomeTask = new Task();
-                    welcomeTask.Subject = 'Welcome new donor: ' + donation.Donor__r.Name;
-                    welcomeTask.Description = 'First donation of ₹' + donation.Amount__c + 
-                                            '. Send welcome packet and build relationship.';
-                    welcomeTask.Priority = 'High';
-                    welcomeTask.Status = 'Not Started';
-                    welcomeTask.ActivityDate = Date.today().addDays(3);
-                    
-                    
-                    tasksToCreate.add(welcomeTask);
-                }
-            }
+        for (Donation__c d : donations) {
+            if (d.Donor__c != null) donorIds.add(d.Donor__c);
         }
-        
-        // Insert tasks if any were created
-        if (!tasksToCreate.isEmpty()) {
-            insert tasksToCreate;
+        if (donorIds.isEmpty()) return;
+
+        // Aggregate total and last date per donor (one SOQL)
+        List<AggregateResult> agg = [
+            SELECT Donor__c donorId, SUM(Amount__c) totalAmount, MAX(Donation_Date__c) lastDate
+            FROM Donation__c
+            WHERE Donor__c IN :donorIds
+            GROUP BY Donor__c
+        ];
+
+        Map<Id, Decimal> totals = new Map<Id, Decimal>();
+        Map<Id, Date> lastDates = new Map<Id, Date>();
+        for (AggregateResult ar : agg) {
+            Id did = (Id) ar.get('donorId');
+            Decimal total = (Decimal) ar.get('totalAmount');
+            Date lastDate = (Date) ar.get('lastDate');
+            totals.put(did, total);
+            lastDates.put(did, lastDate);
         }
-        
-        // Update donor categories based on total donations
-        updateDonorCategories(donorIds);
-    }
-    
-    // Helper method to categorize donors
-    private static void updateDonorCategories(Set<Id> donorIds) {
+
         List<Donor__c> donorsToUpdate = new List<Donor__c>();
-        
-        for (Donor__c donor : [SELECT Id, Total_Donated__c FROM Donor__c WHERE Id IN :donorIds]) {
-            String newCategory;
-            
-            if (donor.Total_Donated__c >= 50000) {
-                newCategory = 'Major Donor';
-            } else if (donor.Total_Donated__c >= 10000) {
-                newCategory = 'Regular Donor';
-            } else {
-                newCategory = 'Supporter';
-            }
-            
-            // Only update if category changed (add Category__c field to Donor first)
-            donor.put('Category__c', newCategory);
-            donorsToUpdate.add(donor);
+        for (Id did : donorIds) {
+            Decimal total = totals.containsKey(did) ? totals.get(did) : 0;
+            String category = 'Supporter';
+            if (total >= 50000) category = 'Major Donor';
+            else if (total >= 10000) category = 'Regular Donor';
+
+            Donor__c dUp = new Donor__c(Id = did);
+            dUp.Category__c = category;
+            if (lastDates.containsKey(did)) dUp.Last_Donation_Date__c = lastDates.get(did);
+            donorsToUpdate.add(dUp);
         }
-        
+
         if (!donorsToUpdate.isEmpty()) {
-            update donorsToUpdate;
+            try {
+                update donorsToUpdate;
+            } catch (DmlException e) {
+                // keep trigger resilient: log the error
+                System.debug('DonationTriggerHandler update error: ' + e.getMessage());
+            }
         }
     }
 }
